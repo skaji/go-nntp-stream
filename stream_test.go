@@ -13,12 +13,12 @@ import (
 )
 
 func TestStream(t *testing.T) {
-	config := nntp.StreamConfig{
-		Addr:    "nntp.perl.org:119",
-		Group:   "perl.cpan.uploads",
-		Offset:  -2,
-		Tick:    5 * time.Second,
-		Timeout: 20 * time.Second,
+	options := []nntp.Option{
+		nntp.WithAddr("nntp.perl.org:119"),
+		nntp.WithGroup("perl.cpan.uploads"),
+		nntp.WithOffset(-2),
+		nntp.WithTick(5 * time.Second),
+		nntp.WithTimeout(20 * time.Second),
 	}
 
 	log.SetFlags(log.LstdFlags)
@@ -34,14 +34,13 @@ func TestStream(t *testing.T) {
 		}
 	}()
 
-	ch := nntp.Stream(ctx, config)
+	ch := nntp.Stream(ctx, options...)
 	for event := range ch {
-		switch event.Type {
-		case nntp.EventTypeArticle:
-			a := event.Article
-			log.Println(a.ID, a.Header.Get("Subject"))
-		default:
-			log.Println(event)
+		switch v := event.(type) {
+		case *nntp.Article:
+			log.Println(v.ID, v.Header.Get("Subject"))
+		case *nntp.Log:
+			log.Println(v.Level, v.Message)
 		}
 	}
 }

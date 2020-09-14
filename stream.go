@@ -6,58 +6,62 @@ import (
 	"time"
 )
 
-type StreamConfig struct {
-	Addr    string
-	Group   string
-	Offset  int
-	Tick    time.Duration
-	Timeout time.Duration
-}
-
-func Stream(ctx context.Context, config StreamConfig) <-chan *Event {
+func Stream(ctx context.Context, options ...Option) <-chan interface{} {
+	cfg := defaultConfig()
+	for _, option := range options {
+		option(cfg)
+	}
 	var (
-		ch      chan *Event = make(chan *Event)
+		ch      chan interface{} = make(chan interface{})
 		cli     *Client
 		current int = -1
 	)
 	oneTick := func(baseContext context.Context) error {
-		ch <- &Event{Type: EventTypeDebug, Message: "one tick"}
-		ctx, ctxCancel := context.WithTimeout(baseContext, config.Timeout)
+		if cfg.subscribeLog {
+			ch <- &Log{Level: LogLevelDebug, Message: "one tick"}
+		}
+		ctx, ctxCancel := context.WithTimeout(baseContext, cfg.timeout)
 		defer ctxCancel()
 		if cli == nil {
-			c, err := Connect(ctx, config.Addr)
+			c, err := Connect(ctx, cfg.addr)
 			if err != nil {
 				return err
 			}
-			ch <- &Event{Type: EventTypeInfo, Message: "successfully connected"}
+			if cfg.subscribeLog {
+				ch <- &Log{Level: LogLevelInfo, Message: "successfully connected"}
+			}
 			cli = c
 		}
 
 		cancel := cli.SetDeadline(ctx)
 		defer cancel()
 
-		group, err := cli.Group(config.Group)
+		group, err := cli.Group(cfg.group)
 		if err != nil {
 			return err
 		}
 		high := group.High
-		ch <- &Event{Type: EventTypeDebug, Message: fmt.Sprintf("%s group high is %d", config.Group, high)}
+		if cfg.subscribeLog {
+			ch <- &Log{Level: LogLevelDebug, Message: fmt.Sprintf("%s group high is %d", cfg.group, high)}
+		}
 		if current == -1 {
-			current = high + config.Offset
+			current = high + cfg.offset
 		}
 		for current < high {
 			a, err := cli.Article(current + 1)
 			if err != nil {
 				return err
 			}
-			ch <- &Event{Type: EventTypeArticle, Article: a}
+			ch <- a
 			current++
 		}
 		return nil
 	}
 	reset := func() {
 		if cli != nil {
-			ch <- &Event{Type: EventTypeInfo, Message: "close connection"}
+			if cfg.subscribeLog {
+				ch <- &Log{Level: LogLevelInfo, Message: "close connection"}
+			}
 			cli.Close()
 			cli = nil
 		}
@@ -66,11 +70,13 @@ func Stream(ctx context.Context, config StreamConfig) <-chan *Event {
 	go func() {
 		defer close(ch)
 
-		ticker := time.NewTicker(config.Tick)
+		ticker := time.NewTicker(cfg.tick)
 		defer ticker.Stop()
 		for {
 			if err := oneTick(ctx); err != nil {
-				ch <- &Event{Type: EventTypeError, Message: err.Error()}
+				if cfg.subscribeLog {
+					ch <- &Log{Level: LogLevelError, Message: err.Error()}
+				}
 				reset()
 			}
 			select {
